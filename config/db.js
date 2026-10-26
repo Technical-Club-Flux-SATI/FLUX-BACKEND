@@ -1,30 +1,34 @@
-const mongoose = require('mongoose');
-const dns = require('dns');
 
-// Fix for Windows / ISP DNS resolvers failing on MongoDB Atlas SRV records (_mongodb._tcp)
+const mongoose = require("mongoose");
+const dns = require("dns");
+
+// Optional DNS configuration for MongoDB Atlas on some Windows networks.
 try {
-  dns.setServers(['8.8.8.8', '1.1.1.1']);
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
 } catch (_) {}
 
-
-
 const connectDB = async () => {
-  const uri = process.env.MONGO_URI || "mongodb://localhost:27017/test";
+  const uri = process.env.MONGO_URI;
+
+  if (!uri) {
+    console.error(
+      "MongoDB connection failed: MONGO_URI is missing. Add it to your backend .env file."
+    );
+    return;
+  }
+
   try {
     const conn = await mongoose.connect(uri);
-    console.log(`MongoDB Connected Successfully ✅ (${conn.connection.host})`);
+    console.log(
+      `MongoDB Connected Successfully ✅ (${conn.connection.host})`
+    );
   } catch (error) {
     console.error(`MongoDB Connection Error: ${error.message}`);
-    if (error.message.includes('querySrv') || error.message.includes('ECONNREFUSED')) {
-      try {
-        console.log('Attempting connection with direct replica set fallback...');
-        const conn = await mongoose.connect(DIRECT_REPLICA_FALLBACK);
-        console.log(`MongoDB Connected Successfully via direct fallback ✅ (${conn.connection.host})`);
-      } catch (fallbackError) {
-        console.error(`Fallback connection error: ${fallbackError.message}`);
-      }
-    }
+    console.error(
+      "Check your MONGO_URI, database credentials, network access, and database status."
+    );
   }
 };
 
 module.exports = connectDB;
+

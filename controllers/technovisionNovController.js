@@ -8,27 +8,36 @@ const EVENT_NAMES = {
   botRacing: "Walking Bot",
 };
 
-// Team size rules (including the leader)
 const TEAM_SIZE_RULES = {
   model: { min: 2, max: 4 },
   robo: { min: 2, max: 4 },
   botRacing: { min: 2, max: 4 },
 };
 
-// Max teams one IP address may register (all events combined)
-const MAX_TEAMS_PER_IP = Number(process.env.TECHNOVISION_MAX_TEAMS_PER_IP) || 50;
+const MAX_TEAMS_PER_IP =
+  Number(process.env.TECHNOVISION_MAX_TEAMS_PER_IP) || 50;
 
 const MAX_TICKET_ATTEMPTS = 5;
 
-const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
+const isNonEmptyString = (v) =>
+  typeof v === "string" && v.trim().length > 0;
+
 const EMAIL_REGEX = /^[^\s@]+@satiengg\.in$/i;
-const EMAIL_ERROR = "must be a college email ID ending with @satiengg.in (personal email IDs are not accepted).";
+const EMAIL_ERROR =
+  "must be a college email ID ending with @satiengg.in (personal email IDs are not accepted).";
 const PHONE_REGEX = /^\d{10}$/;
 const YEARS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 
+const normalize = (value) =>
+  String(value ?? "").trim().toLowerCase();
+
 const getClientIp = (req) => {
   const forwarded = req.headers["x-forwarded-for"];
-  const ip = (typeof forwarded === "string" && forwarded.split(",")[0].trim()) || req.ip || "";
+  const ip =
+    (typeof forwarded === "string" && forwarded.split(",")[0].trim()) ||
+    req.ip ||
+    "";
+
   return ip.slice(0, 64);
 };
 
@@ -37,21 +46,48 @@ const fail = (res, status, message) => {
   throw new Error(message);
 };
 
+// Compare every relevant field, not just the team name or leader email.
+
+const isSameRegistration = (registration, submitted) => {
+  return (
+    normalize(registration.eventId) === normalize(submitted.eventId) &&
+    normalize(registration.leaderEmail) === normalize(submitted.leaderEmail) &&
+    normalize(registration.leaderContact) === normalize(submitted.leaderContact) &&
+    normalize(registration.leaderEnrollmentNo) === normalize(submitted.leaderEnrollmentNo) &&
+    normalize(registration.teamName) === normalize(submitted.teamName)
+  );
+};
+
+
+const sendRecovered = (res, registration) => {
+  const data = registration.toObject();
+  delete data.submitterIp;
+
+  return res.status(200).json({
+    success: true,
+    recovered: true,
+    message:
+      "You are already registered. Here is your existing ticket.",
+    ticketId: registration.ticketId,
+    data,
+  });
+};
+
 /**
  * @route   POST /api/technovision-nov/register
- * @desc    Submit registration directly
+ * @desc    Submit registration or recover an exact existing registration
  * @access  Public
  */
 const registerTeam = asyncHandler(async (req, res) => {
   const body = req.body || {};
   const { eventId, teamName, leaderYear } = body;
 
-  // 1. Validate Event
+  // 1. Validate event.
   if (typeof eventId !== "string" || !EVENT_NAMES[eventId]) {
     fail(res, 400, "Invalid event selected.");
   }
 
-  // 2. Validate Team Name + Leader details (all must be strings)
+  // 2. Validate team name and leader details.
   const leaderFields = [
     body.leaderName,
     body.leaderEmail,
@@ -60,33 +96,57 @@ const registerTeam = asyncHandler(async (req, res) => {
     body.leaderBranch,
     body.leaderEnrollmentNo,
   ];
+
   if (!isNonEmptyString(teamName)) {
     fail(res, 400, "Team name is required.");
   }
-  if (!leaderFields.every(isNonEmptyString) || !isNonEmptyString(leaderYear)) {
-    fail(res, 400, "All team leader fields including Enrollment No. are compulsory.");
+
+  if (
+    !leaderFields.every(isNonEmptyString) ||
+    !isNonEmptyString(leaderYear)
+  ) {
+    fail(
+      res,
+      400,
+      "All team leader fields including Enrollment No. are compulsory."
+    );
   }
+
   if (!YEARS.includes(leaderYear)) {
     fail(res, 400, "Invalid year selected for the team leader.");
   }
 
   const trimmedTeamName = teamName.trim();
+  const trimmedEmail = body.leaderEmail.trim().toLowerCase();
+  const trimmedContact = body.leaderContact.trim();
+  const trimmedLeaderEnrollment =
+    body.leaderEnrollmentNo.trim();
+
   if (trimmedTeamName.length < 2 || trimmedTeamName.length > 60) {
     fail(res, 400, "Team name must be between 2 and 60 characters.");
   }
 
-  const trimmedEmail = body.leaderEmail.trim().toLowerCase();
   if (!EMAIL_REGEX.test(trimmedEmail)) {
     fail(res, 400, `Team leader email ${EMAIL_ERROR}`);
   }
-  if (!PHONE_REGEX.test(body.leaderContact.trim())) {
-    fail(res, 400, "Please enter a valid 10-digit contact number for the team leader.");
+
+  if (!PHONE_REGEX.test(trimmedContact)) {
+    fail(
+      res,
+      400,
+      "Please enter a valid 10-digit contact number for the team leader."
+    );
   }
 
-  // 3. Validate Team Size Constraints
+  // 3. Validate team size.
   const numericSize = Number(body.teamSize);
   const rule = TEAM_SIZE_RULES[eventId];
-  if (!Number.isInteger(numericSize) || numericSize < rule.min || numericSize > rule.max) {
+
+  if (
+    !Number.isInteger(numericSize) ||
+    numericSize < rule.min ||
+    numericSize > rule.max
+  ) {
     fail(
       res,
       400,
@@ -96,9 +156,13 @@ const registerTeam = asyncHandler(async (req, res) => {
     );
   }
 
-  // 4. Validate Additional Team Members
-  const teamMembers = Array.isArray(body.teamMembers) ? body.teamMembers : [];
+  // 4. Validate additional members.
+  const teamMembers = Array.isArray(body.teamMembers)
+    ? body.teamMembers
+    : [];
+
   const expectedMemberCount = numericSize - 1;
+
   if (teamMembers.length !== expectedMemberCount) {
     fail(
       res,
@@ -108,59 +172,228 @@ const registerTeam = asyncHandler(async (req, res) => {
   }
 
   const seenEmails = new Set([trimmedEmail]);
+  const seenEnrollments = new Set([
+    normalize(trimmedLeaderEnrollment),
+  ]);
+
+  const normalizedMembers = [];
+
   for (let i = 0; i < teamMembers.length; i++) {
-    const m = teamMembers[i] || {};
+    const member = teamMembers[i] || {};
+    const memberNumber = i + 2;
+
     if (
-      ![m.name, m.email, m.contact, m.college, m.branch, m.enrollmentNo].every(isNonEmptyString) ||
-      !isNonEmptyString(m.year)
+      ![
+        member.name,
+        member.email,
+        member.contact,
+        member.college,
+        member.branch,
+        member.enrollmentNo,
+      ].every(isNonEmptyString) ||
+      !isNonEmptyString(member.year)
     ) {
-      fail(res, 400, `All fields including Enrollment No. are compulsory for Member #${i + 2}.`);
+      fail(
+        res,
+        400,
+        `All fields including Enrollment No. are compulsory for Member #${memberNumber}.`
+      );
     }
-    if (!YEARS.includes(m.year)) {
-      fail(res, 400, `Invalid year selected for Member #${i + 2}.`);
+
+    if (!YEARS.includes(member.year)) {
+      fail(
+        res,
+        400,
+        `Invalid year selected for Member #${memberNumber}.`
+      );
     }
-    const memberEmail = m.email.trim().toLowerCase();
-    if (!EMAIL_REGEX.test(memberEmail)) {
-      fail(res, 400, `Member #${i + 2} email ${EMAIL_ERROR}`);
+
+    const email = member.email.trim().toLowerCase();
+    const contact = member.contact.trim();
+    const enrollmentNo = member.enrollmentNo.trim();
+
+    if (!EMAIL_REGEX.test(email)) {
+      fail(
+        res,
+        400,
+        `Member #${memberNumber} email ${EMAIL_ERROR}`
+      );
     }
-    if (!PHONE_REGEX.test(m.contact.trim())) {
-      fail(res, 400, `Please enter a valid 10-digit contact number for Member #${i + 2}.`);
+
+    if (!PHONE_REGEX.test(contact)) {
+      fail(
+        res,
+        400,
+        `Please enter a valid 10-digit contact number for Member #${memberNumber}.`
+      );
     }
-    if (seenEmails.has(memberEmail)) {
-      fail(res, 400, `Member #${i + 2} uses an email address already used in this team.`);
+
+    if (seenEmails.has(email)) {
+      fail(
+        res,
+        400,
+        `Member #${memberNumber} uses an email address already used in this team.`
+      );
     }
-    seenEmails.add(memberEmail);
+
+    seenEmails.add(email);
+
+    const enrollmentKey = normalize(enrollmentNo);
+
+    if (seenEnrollments.has(enrollmentKey)) {
+      fail(
+        res,
+        400,
+        `Member #${memberNumber} uses an enrollment number already used in this team.`
+      );
+    }
+
+    seenEnrollments.add(enrollmentKey);
+
+    normalizedMembers.push({
+      name: member.name.trim(),
+      email,
+      contact,
+      college: member.college.trim(),
+      branch: member.branch.trim(),
+      enrollmentNo,
+      year: member.year,
+    });
   }
 
-  // 5. Duplicate leader email: if it is the same team retrying (same phone + team name),
-  //    return the existing ticket instead of an error so a lost ticket can be recovered.
-  const isSameSubmission = (rec) =>
-    rec.leaderContact === body.leaderContact.trim() &&
-    rec.teamName.trim().toLowerCase() === trimmedTeamName.toLowerCase();
+  const eventName = EVENT_NAMES[eventId];
 
-  const sendRecovered = (rec) =>
-    res.status(200).json({
-      success: true,
-      recovered: true,
-      message: "You are already registered. Here is your existing ticket.",
-      ticketId: rec.ticketId,
-      data: rec.toObject(),
-    });
+  // Build the normalized registration data used for both recovery
+  // comparison and saving.
+  const submitted = {
+    eventId,
+    eventName,
+    teamName: trimmedTeamName,
+    teamSize: numericSize,
+    leaderName: body.leaderName.trim(),
+    leaderEmail: trimmedEmail,
+    leaderContact: trimmedContact,
+    leaderCollege: body.leaderCollege.trim(),
+    leaderBranch: body.leaderBranch.trim(),
+    leaderEnrollmentNo: trimmedLeaderEnrollment,
+    leaderYear,
+    teamMembers: normalizedMembers,
+  };
 
-  const existing = await TechnovisionNovRegistration.findOne({
+  // 5. RECOVERY CHECK MUST HAPPEN BEFORE GENERAL DUPLICATE CHECKS.
+  //
+  // Search only within the selected event. An exact repeat submission
+  // returns the saved ticket; a mismatch continues to duplicate checks.
+  const existingLeader = await TechnovisionNovRegistration.findOne({
     eventId,
     leaderEmail: trimmedEmail,
   });
 
-  if (existing) {
-    if (isSameSubmission(existing)) return sendRecovered(existing);
-    fail(res, 409, `A team led by '${trimmedEmail}' is already registered for this event.`);
+  
+if (existingLeader) {
+  // Same event + leader email + phone:
+  // return the original ticket, even if the team name changed.
+  if (
+    normalize(existingLeader.leaderContact) ===
+    normalize(trimmedContact)
+  ) {
+    return sendRecovered(res, existingLeader);
   }
 
-  // 6. Per-IP limit (basic abuse protection)
+  // Same email but a different phone: block the request.
+  fail(
+    res,
+    409,
+    `Sorry, this email is already registered with a different phone number for this event: ${eventName}. Please try another email or contact the organizers.`
+  );
+}
+
+
+  // 6. Block a participant already registered as a leader or member.
+  // Only inspect registrations for the selected event.
+  const submittedParticipants = [
+    {
+      name: submitted.leaderName,
+      email: submitted.leaderEmail,
+      contact: submitted.leaderContact,
+      enrollmentNo: submitted.leaderEnrollmentNo,
+    },
+    ...normalizedMembers.map((member) => ({
+      name: member.name,
+      email: member.email,
+      contact: member.contact,
+      enrollmentNo: member.enrollmentNo,
+    })),
+  ];
+
+  const registrationsForEvent =
+    await TechnovisionNovRegistration.find({ eventId });
+
+  for (const registration of registrationsForEvent) {
+    const registeredParticipants = [
+      {
+        name: registration.leaderName,
+        email: registration.leaderEmail,
+        contact: registration.leaderContact,
+        enrollmentNo: registration.leaderEnrollmentNo,
+      },
+      ...(registration.teamMembers || []).map((member) => ({
+        name: member.name,
+        email: member.email,
+        contact: member.contact,
+        enrollmentNo: member.enrollmentNo,
+      })),
+    ];
+
+    for (const participant of submittedParticipants) {
+      const duplicate = registeredParticipants.find((registered) => {
+        const sameEmail =
+          normalize(registered.email) === normalize(participant.email);
+
+        const submittedEnrollment = normalize(
+          participant.enrollmentNo
+        );
+
+        const sameEnrollment =
+          submittedEnrollment !== "" &&
+          normalize(registered.enrollmentNo) === submittedEnrollment;
+
+        return sameEmail || sameEnrollment;
+      });
+
+      if (duplicate) {
+        const sameEmail =
+          normalize(duplicate.email) === normalize(participant.email);
+
+        const differentPhone =
+          normalize(duplicate.contact) !== normalize(participant.contact);
+
+        if (sameEmail && differentPhone) {
+          fail(
+            res,
+            409,
+            `Sorry, this email is already registered with a different phone number for this event: ${eventName}. Please try another email or contact the organizers.`
+          );
+        }
+
+        fail(
+          res,
+          409,
+          `${participant.name} is already registered in a team for ${eventName}. A person cannot join multiple teams in the same event.`
+        );
+      }
+    }
+  }
+
+  // 7. Per-IP limit.
   const clientIp = getClientIp(req);
+
   if (clientIp) {
-    const teamsFromIp = await TechnovisionNovRegistration.countDocuments({ submitterIp: clientIp });
+    const teamsFromIp =
+      await TechnovisionNovRegistration.countDocuments({
+        submitterIp: clientIp,
+      });
+
     if (teamsFromIp >= MAX_TEAMS_PER_IP) {
       fail(
         res,
@@ -170,7 +403,7 @@ const registerTeam = asyncHandler(async (req, res) => {
     }
   }
 
-  // 7. Check Duplicate Team Name within the same event (case-insensitive)
+  // 8. Team name must be unique within the selected event.
   const existingTeam = await TechnovisionNovRegistration.findOne({
     eventId,
     teamName: trimmedTeamName,
@@ -184,54 +417,91 @@ const registerTeam = asyncHandler(async (req, res) => {
     );
   }
 
-  // 8. Save to Database (retry if the random ticket ID collides)
-  const eventCode = eventId === "botRacing" ? "BOT" : eventId === "robo" ? "ROBO" : "MOD";
+  // 9. Create the registration and ticket.
+  const eventCode =
+    eventId === "botRacing"
+      ? "BOT"
+      : eventId === "robo"
+        ? "ROBO"
+        : "MOD";
+
   const payload = {
-    eventId,
-    eventName: EVENT_NAMES[eventId],
-    teamName: trimmedTeamName,
-    teamSize: numericSize,
-    leaderName: body.leaderName.trim(),
-    leaderEmail: trimmedEmail,
-    leaderContact: body.leaderContact.trim(),
-    leaderCollege: body.leaderCollege.trim(),
-    leaderBranch: body.leaderBranch.trim(),
-    leaderEnrollmentNo: body.leaderEnrollmentNo.trim(),
-    leaderYear,
-    teamMembers: teamMembers.map((m) => ({
-      name: m.name.trim(),
-      email: m.email.trim().toLowerCase(),
-      contact: m.contact.trim(),
-      college: m.college.trim(),
-      branch: m.branch.trim(),
-      enrollmentNo: m.enrollmentNo.trim(),
-      year: m.year,
-    })),
+    ...submitted,
     status: "confirmed",
     submitterIp: clientIp || undefined,
   };
 
   let registration = null;
-  for (let attempt = 1; attempt <= MAX_TICKET_ATTEMPTS; attempt++) {
-    const ticketId = `FLUX-TV26-${eventCode}-${crypto.randomInt(100000, 1000000)}`;
+
+  for (
+    let attempt = 1;
+    attempt <= MAX_TICKET_ATTEMPTS;
+    attempt++
+  ) {
+    const ticketId = `FLUX-TV26-${eventCode}-${crypto.randomInt(
+      100000,
+      1000000
+    )}`;
+
     try {
-      registration = await TechnovisionNovRegistration.create({ ...payload, ticketId });
+      registration = await TechnovisionNovRegistration.create({
+        ...payload,
+        ticketId,
+      });
+
       break;
     } catch (err) {
-      const isTicketCollision = err?.code === 11000 && err?.keyPattern?.ticketId;
+      const isTicketCollision =
+        err?.code === 11000 && err?.keyPattern?.ticketId;
+
+      // A concurrent request may have saved the same leader's team
+      // after our initial recovery check. Re-check before returning an error.
       if (err?.code === 11000 && !isTicketCollision) {
-        // Double-submit race: the same team was saved by a parallel request.
-        const saved = await TechnovisionNovRegistration.findOne({ eventId, leaderEmail: trimmedEmail });
-        if (saved && isSameSubmission(saved)) return sendRecovered(saved);
+        const saved = await TechnovisionNovRegistration.findOne({
+          eventId,
+          leaderEmail: trimmedEmail,
+        });
+
+        if (saved) {
+          if (isSameRegistration(saved, submitted)) {
+            return sendRecovered(res, saved);
+          }
+
+          if (
+            normalize(saved.leaderContact) !==
+            normalize(trimmedContact)
+          ) {
+            fail(
+              res,
+              409,
+              `Sorry, this email is already registered with a different phone number for this event: ${eventName}. Please try another email or contact the organizers.`
+            );
+          }
+
+          fail(
+            res,
+            409,
+            `This email is already registered for ${eventName}. You cannot register another team with the same email for this event.`
+          );
+        }
       }
-      if (!isTicketCollision || attempt === MAX_TICKET_ATTEMPTS) throw err;
+
+      if (!isTicketCollision || attempt === MAX_TICKET_ATTEMPTS) {
+        throw err;
+      }
     }
+  }
+
+  if (!registration) {
+    throw new Error(
+      "Could not generate a unique ticket. Please try again."
+    );
   }
 
   const data = registration.toObject();
   delete data.submitterIp;
 
-  res.status(201).json({
+  return res.status(201).json({
     success: true,
     message: "Registration successful!",
     ticketId: registration.ticketId,
@@ -262,7 +532,9 @@ const getAllRegistrations = asyncHandler(async (req, res) => {
  * @access  Private (Key-Gated)
  */
 const deleteRegistration = asyncHandler(async (req, res) => {
-  const registration = await TechnovisionNovRegistration.findById(req.params.id);
+  const registration = await TechnovisionNovRegistration.findById(
+    req.params.id
+  );
 
   if (!registration) {
     res.status(404);
