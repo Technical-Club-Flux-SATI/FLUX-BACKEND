@@ -17,6 +17,7 @@ const { protect, admin } = require("../middleware/authMiddleware");
 
 // Temporary key-gated event admin (no login) — remove after FluxWave 2.0 ends
 const eventAdminAuth = require("../middleware/eventAdminAuth");
+const { ensureDB } = require("../config/db");
 
 // ---- Round 0: Registration (Jul 11-20) ----
 // POST /api/fluxwave/register
@@ -38,19 +39,19 @@ router.put("/submit-final", submitFinal);
 
 // ---- Evaluation (Jul 29-31) — admin only ----
 // PATCH /api/fluxwave/:id/status -> shortlist / reject / mark finalist
-router.patch("/:id/status", protect, admin, updateStatus);
+router.patch("/:id/status", protect, admin, ensureDB, updateStatus);
 
 // ---- Grand Finale check-in (Aug 1) — admin only ----
 // PATCH /api/fluxwave/:id/checkin -> mark a finalist team as checked in at KSH
-router.patch("/:id/checkin", protect, admin, checkIn);
+router.patch("/:id/checkin", protect, admin, ensureDB, checkIn);
 
 // GET /api/fluxwave/registrations -> all registrations — admin only
-router.get("/registrations", protect, admin, getAllRegistrations);
+router.get("/registrations", protect, admin, ensureDB, getAllRegistrations);
 
 // ---- TEMPORARY: key-gated event admin, no login required ----
 // Delete this whole block once FluxWave 2.0 wraps up.
-router.get("/public-admin/registrations", eventAdminAuth, getAllRegistrations);
-router.patch("/public-admin/:id/status", eventAdminAuth, updateStatus);
-router.patch("/public-admin/:id/checkin", eventAdminAuth, checkIn);
+router.get("/public-admin/registrations", eventAdminAuth, ensureDB, getAllRegistrations);
+router.patch("/public-admin/:id/status", eventAdminAuth, ensureDB, updateStatus);
+router.patch("/public-admin/:id/checkin", eventAdminAuth, ensureDB, checkIn);
 
 module.exports = router;
