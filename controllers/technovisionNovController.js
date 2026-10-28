@@ -15,9 +15,6 @@ const TEAM_SIZE_RULES = {
   botRacing: { min: 2, max: 4 },
 };
 
-// Max teams one IP address may register (all events combined)
-const MAX_TEAMS_PER_IP = Number(process.env.TECHNOVISION_MAX_TEAMS_PER_IP) || 50;
-
 const MAX_TICKET_ATTEMPTS = 5;
 
 const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
@@ -157,18 +154,8 @@ const registerTeam = asyncHandler(async (req, res) => {
     fail(res, 409, `A team led by '${trimmedEmail}' is already registered for this event.`);
   }
 
-  // 6. Per-IP limit (basic abuse protection)
+  // 6. (Per-IP limit removed: campus Wi-Fi and mobile carriers share IPs.)
   const clientIp = getClientIp(req);
-  if (clientIp) {
-    const teamsFromIp = await TechnovisionNovRegistration.countDocuments({ submitterIp: clientIp });
-    if (teamsFromIp >= MAX_TEAMS_PER_IP) {
-      fail(
-        res,
-        429,
-        `Registration limit reached for this network (${MAX_TEAMS_PER_IP} teams). Please contact the organizers for help.`
-      );
-    }
-  }
 
   // 7. Check Duplicate Team Name within the same event (case-insensitive)
   const existingTeam = await TechnovisionNovRegistration.findOne({

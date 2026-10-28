@@ -10,7 +10,7 @@ const faqRoutes = require('./routes/faqRoutes');
 
 // 1. Load Environment & Connect Database
 dotenv.config();
-connectDB();
+connectDB().catch(() => {}); // failure is logged; ensureDB retries on the next request
 
 const app = express();
 const server = http.createServer(app);
@@ -70,6 +70,16 @@ app.use('/api/fluxwave', require('./routes/fluxWaveRoutes'));
 app.use('/api/faq', faqRoutes);
 app.use('/api/recruitment', require('./routes/recruitmentRoutes'));
 app.use('/api/technovision-nov', require('./routes/technovisionNovRoutes'));
+
+// Health check (also usable by an uptime pinger to keep the function warm)
+app.get('/api/health', async (req, res) => {
+    try {
+        await connectDB();
+        res.json({ status: 'ok', db: 'connected' });
+    } catch (error) {
+        res.status(503).json({ status: 'error', db: 'disconnected' });
+    }
+});
 
 // Root Route
 app.get('/', (req, res) => {
